@@ -1,6 +1,15 @@
 #include "rope_kernel.cuh"
-namespace kernel {
+
+#define INT4(value) (reinterpret_cast<int4 *>(&(value))[0])
+#define FLOAT2(value) (reinterpret_cast<float2 *>(&(value))[0])
+#define FLOAT4(value) (reinterpret_cast<float4 *>(&(value))[0])
+#define HALF2(value) (reinterpret_cast<half2 *>(&(value))[0])
+#define BFLOAT2(value) (reinterpret_cast<__nv_bfloat162 *>(&(value))[0])
+#define BLOCK_SIZE 256
 #define theta 10000.0f
+
+namespace kernel {
+
 
 #if defined (LLAMA3_SUPPORT)
 __global__ void rope_kernel_cu_fp32(int pos, int dim, int kv_dim, int head_size,
@@ -137,6 +146,30 @@ __global__ void sin_cos_calc(int head_size, int max_seq_len, float* sin_cache, f
     *(cos_cache + pos * head_size + head_dim) = fcr;
   }
 }
+
+__global__ void sin_cos_calc_f32x2_pack(int N, int max_seq_len, float* sin_cache, float* cos_cache) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  
+  int token_pos = idx / N;
+  int token_idx = idx % N;
+  
+  // 计算两个复数分量对应的旋转频率因子
+  float exp_f_v = 1.0f / powf(theta, 2 * token_idx * 2 / (N * 2.0f));
+  float exp_s_v = 1.0f / powf(theta, 2 * (token_idx * 2 + 1) / (N * 2.0f));
+
+  // 计算两个旋转角度
+  float2 sin_v;
+  sin_v.x = sinf(token_pos * exp_f_v);
+  sin_v.y = sinf((token_pos + 1) * exp_s_v);
+  float2 cos_v;
+  cos_v.x = cosf(token_pos * exp_f_v);
+  cos_v.y = cosf((token_pos + 1) * exp_s_v);
+
+  FLOAT2(sin_cache[idx * 2]) = sin_v;
+  FLOAT2(cos_cache[idx * 2]) = cos_v;
+}
+
+
 #endif
 
 void sin_cos_cache_calc_cu(int head_size, int max_seq_len, const tensor::Tensor& sin_cache,
@@ -144,12 +177,31 @@ void sin_cos_cache_calc_cu(int head_size, int max_seq_len, const tensor::Tensor&
   CHECK_EQ(sin_cache.is_empty(), false);
   CHECK_EQ(cos_cache.is_empty(), false);
   int threads = head_size;
+  // head_size * max_seq_len
   if (stream) {
     sin_cos_calc<<<1, threads, 0, stream>>>(head_size, max_seq_len,
                                             const_cast<float*>(sin_cache.ptr<float>()),
                                             const_cast<float*>(cos_cache.ptr<float>()));
   } else {
     sin_cos_calc<<<1, threads>>>(head_size, max_seq_len, const_cast<float*>(sin_cache.ptr<float>()),
+                                 const_cast<float*>(cos_cache.ptr<float>()));
+  }
+}
+
+void sin_cos_cache_calc_f32x2_pack_cu(int head_size, int max_seq_len, const tensor::Tensor& sin_cache,
+                           const tensor::Tensor& cos_cache, cudaStream_t stream) {
+  CHECK_EQ(sin_cache.is_empty(), false);
+  CHECK_EQ(cos_cache.is_empty(), false);
+  int N = (int)(head_size / 2);
+  dim3 grid((max_seq_len * N + BLOCK_SIZE - 1) / BLOCK_SIZE);
+  dim3 block(BLOCK_SIZE);
+
+  if (stream) {
+    sin_cos_calc_f32x2_pack<<<grid, block, 0, stream>>>(N, max_seq_len,
+                                            const_cast<float*>(sin_cache.ptr<float>()),
+                                            const_cast<float*>(cos_cache.ptr<float>()));
+  } else {
+    sin_cos_calc_f32x2_pack<<<grid, block>>>(N, max_seq_len, const_cast<float*>(sin_cache.ptr<float>()),
                                  const_cast<float*>(cos_cache.ptr<float>()));
   }
 }

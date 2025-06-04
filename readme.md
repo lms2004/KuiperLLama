@@ -17,10 +17,10 @@
 具体推理速度
 1. llama2 :stories110M.bin tokenizer.model
 电源
-[Generation] Tokens: 989, Time: 3.2111 sec, TPS: 307.99 tokens/sec
-[Overall] Total time: 3.2407 sec
+[Generation] Tokens: 989, Time: 3.2184 sec, TPS: 307.30 tokens/sec
+[Overall] Total time: 3.2518 sec
 
-steps/s:308.565568
+steps/s:307.510701
 
 电池
 [Generation] Tokens: 989, Time: 4.4382 sec, TPS: 222.84 tokens/sec
